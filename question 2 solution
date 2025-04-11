@@ -1,0 +1,76 @@
+-- logic explanation : 
+
+-- 1st preparing a session id column-
+-- 	first created a lag column of event time (ex Event time 2023-09-10 10:10:00 lag time 2023-09-10 10:00:00 )
+--     on the basis of difference between lag time<30min 
+--     put rownumber to session id 
+--     created session id 
+--     
+-- 2nd preparing session start time and end time 
+-- 	 if timediff< 30min > event time > start session time 
+--      if timediff> 30min > start and end time both > event time 
+-- 	
+-- 3rd session duration 
+-- 	session duration : diff(min,end time ,starttime)
+
+-- 4th count events 
+-- 	if timediff< 30min then  sum(count(event time))for both event time and lagtime 
+-- 	if time diff>30min  then count only(event time)
+
+
+
+WITH ranking_events AS (
+    SELECT 
+        user_id,
+        event_time,
+        ROW_NUMBER() OVER (PARTITION BY user_id ORDER BY event_time) AS event_rank1
+    FROM 
+        user_events
+),
+
+-- creation of lag time  
+Session_info AS (
+    SELECT 
+        user_id,
+        event_time,
+        event_rank1,
+        LAG(event_time) OVER (PARTITION BY user_id ORDER BY event_time) AS previous_event_time FROM ranking_events),
+
+
+-- CTE to group events into sessions based on a 30-minute gap
+Sessiongroups AS (
+    SELECT 
+        user_id,
+        event_time,
+        SUM(CASE 
+            WHEN previous_event_time IS NULL OR 
+				TIMESTAMPDIFF(MINUTE, previous_event_time, event_time) > 30 THEN 1 
+				else 0 
+                end ) OVER (PARTITION BY user_id ORDER BY event_time) AS session_id
+    FROM 
+        Session_info
+),
+
+-- CTE to summarize session data
+session_summary AS (
+    SELECT 
+        user_id,
+        session_id,
+        MIN(event_time) AS session_start_time,
+        MAX(event_time) AS session_end_time,
+        TIMEDIFF(MAX(event_time), MIN(event_time)) AS session_duration,
+        COUNT(event_time) AS event_count FROM Sessiongroups
+    GROUP BY 
+        user_id, session_id
+)
+
+-- Final selection of session summary data
+SELECT 
+    user_id,
+    session_id,
+    session_start_time,
+    session_end_time,
+    session_duration,
+    event_count FROM session_summary
+ORDER BY 
+    user_id, session_id;
